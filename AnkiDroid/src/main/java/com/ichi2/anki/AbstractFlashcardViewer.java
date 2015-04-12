@@ -52,6 +52,7 @@ import android.text.style.StrikethroughSpan;
 import android.text.style.StyleSpan;
 import android.text.style.UnderlineSpan;
 
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.GestureDetector;
 import android.view.GestureDetector.SimpleOnGestureListener;
@@ -110,9 +111,12 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -2806,12 +2810,143 @@ public abstract class AbstractFlashcardViewer extends NavigationDrawerActivity {
         AnkiDroidApp.getCompat().invalidateOptionsMenu(AbstractFlashcardViewer.this);
     }
 
-    /** Fixing bug 720: <input> focus, thanks to pablomouzo on android issue 7189 */
-    class MyWebView extends WebView {
+  /////////////////////// EDIT STARTS
 
-        public MyWebView(Context context) {
-            super(context);
+  public static final String TAG = "ON_TOUCH_TEST";
+  private static Map<String, String> kanjiMap;
+
+  /** Fixing bug 720: <input> focus, thanks to pablomouzo on android issue 7189 */
+  class MyWebView extends WebView {
+
+    private static final int KANJI_PER_LINE = 9;
+    private static final int MARGIN_LEFT = 20;
+    private static final int MARGIN_TOP = 10;
+    private static final int CHAR_WIDTH = 47;
+    private static final int LINE_HEIGHT = 50;
+
+    private static final int DOUBLE_TAP_LIMIT = 500;  // ms
+
+    private String webContent;
+    private long lastClickTimestamp = 0;
+    private boolean isDoubleTap = false;
+
+    public MyWebView(final Context context) {
+      super(context);
+
+      if (kanjiMap == null) initKanjiMap(context);
+
+      setOnTouchListener(new OnTouchListener() {
+
+        @Override
+        public boolean onTouch(View view, MotionEvent motionEvent) {
+          if (!(motionEvent.getAction() == MotionEvent.ACTION_UP)) return false;
+
+          long timeNow = System.currentTimeMillis();
+          long timeBetweenTaps = timeNow - lastClickTimestamp;
+          lastClickTimestamp = timeNow;
+
+          Log.d(TAG, "TAP TIME: " + timeBetweenTaps);
+          if (timeBetweenTaps <= DOUBLE_TAP_LIMIT) {
+            isDoubleTap = true;
+          } else {
+            isDoubleTap = false;
+          }
+
+          int x = (int)motionEvent.getX();
+          int y = (int)motionEvent.getY();
+          int contentX = x - MARGIN_LEFT;
+          int contentY = y - MARGIN_TOP;
+
+          String cardText = parseCardText();
+
+          if (cardText != null) {
+            Log.i(TAG, "Found card text: " + cardText);
+
+            List<String> lines = splitEqually(cardText, KANJI_PER_LINE);
+            String kanji = findKanji(lines, contentX, contentY);
+            String keyword = kanjiMap.get(kanji);
+
+            if (kanji != null && keyword != null) {
+              Log.i(TAG, "Kanji: " + kanji + " keyword: " + keyword);
+
+              if (isDoubleTap) {
+                loadKoohiiPage(kanji);
+              } else {
+                showToast(keyword);
+              }
+            }
+          }
+
+          return false;
         }
+      });
+    }
+
+    private void loadKoohiiPage(String kanji) {
+      String url = "http://kanji.koohii.com/study/kanji/" + kanji;
+      Intent intent = new Intent(Intent.ACTION_VIEW);
+      intent.setData(Uri.parse(url));
+      startActivity(intent);
+    }
+
+    private void showToast(String keyword) {
+      Themes.showThemedToast(AbstractFlashcardViewer.this, keyword, true);
+    }
+
+    private String parseCardText() {
+      Pattern pattern = Pattern.compile("<div\\s+class=jp>.+?<\\/div>");
+      Matcher matcher = pattern.matcher(webContent);
+
+      if (matcher.find()) {
+        return Html.fromHtml(matcher.group()).toString();
+      } else {
+        return null;
+      }
+    }
+
+    private String findKanji(List<String> lines, int x, int y) {
+      if (x > 0 && y > 0) {
+        int lineIndex = y / LINE_HEIGHT;
+        int charIndex = x / CHAR_WIDTH;
+
+        if (lineIndex < lines.size()) {
+          String line = lines.get(lineIndex);
+          if (charIndex < line.length()) {
+            return String.valueOf(line.charAt(charIndex));
+          }
+        }
+      }
+      return null;
+    }
+
+    private void initKanjiMap(Context context) {
+      Map<String, String> map = new HashMap<String, String>();
+      String[] data = context.getResources().getStringArray(R.array.heisig_data);
+
+      for (String kanjiData : data) {
+        String[] tuple = kanjiData.split(":");
+        map.put(tuple[0], tuple[1]);
+      }
+
+      kanjiMap = map;
+    }
+
+    private List<String> splitEqually(String text, int size) {
+      List<String> ret = new ArrayList<String>();
+
+      for (int start = 0; start < text.length(); start += size) {
+        ret.add(text.substring(start, Math.min(text.length(), start + size)));
+      }
+      return ret;
+    }
+
+    @Override
+    public void loadDataWithBaseURL(String baseUrl, String data, String mimeType, String encoding, String historyUrl) {
+      super.loadDataWithBaseURL(baseUrl, data, mimeType, encoding, historyUrl);
+      webContent = data;
+    }
+
+/////////////////////// EDIT ENDS
 
 
         @Override
