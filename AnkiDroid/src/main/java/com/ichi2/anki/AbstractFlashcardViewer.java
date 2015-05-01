@@ -1565,8 +1565,37 @@ public abstract class AbstractFlashcardViewer extends NavigationDrawerActivity {
             // Run any post-load events in javascript that rely on the window being completely loaded.
             @Override
             public void onPageFinished(WebView view, String url) {
+
+                String js = "javascript:document.body.onclick = function() { \n" +
+                    "var s = window.getSelection();\n" +
+                    "s.modify('move', 'back', 'character');\n" +
+                    "s.modify('extend', 'forward', 'character');\n" +
+                    "var t = s.toString();\n" +
+                    "s.removeAllRanges();\n" +
+                    "alert('kanji:'.concat(t)); }\n";
+
+                view.loadUrl(js);
                 Timber.d("onPageFinished triggered");
                 view.loadUrl("javascript:onPageFinished();");
+
+                /*
+                // Gets clicked on word (or selected text if text is selected)
+                var t = '';
+                if (window.getSelection && (sel = window.getSelection()).modify) {
+                    // Webkit, Gecko
+                    var s = window.getSelection();
+                    if (s.isCollapsed) {
+                        //s.modify('move', 'forward', 'character');
+                        s.modify('move', 'back', 'character');
+                        s.modify('extend', 'forward', 'character');
+                        t = s.toString();
+                        s.modify('move', 'forward', 'character'); //clear selection
+                    }
+                    else {
+                        //t = s.toString();
+                    }
+                    */
+
             }
         });
 
@@ -2775,6 +2804,22 @@ public abstract class AbstractFlashcardViewer extends NavigationDrawerActivity {
     // INNER CLASSES
     // ----------------------------------------------------------------------------
 
+    private Map<String, String> mKanjiMap;
+    private Map<String, String> getKanjiMap() {
+        if (mKanjiMap == null) {
+            mKanjiMap = new HashMap<String, String>();
+
+            String[] data = getResources().getStringArray(R.array.heisig_data);
+
+            for (String kanjiData : data) {
+                String[] tuple = kanjiData.split(":");
+                mKanjiMap.put(tuple[0], tuple[1]);
+            }
+        }
+
+        return mKanjiMap;
+    }
+
     /**
      * Provides a hook for calling "alert" from javascript. Useful for debugging your javascript.
      */
@@ -2783,6 +2828,13 @@ public abstract class AbstractFlashcardViewer extends NavigationDrawerActivity {
         public boolean onJsAlert(WebView view, String url, String message, JsResult result) {
             Timber.i("AbstractFlashcardViewer:: onJsAlert: %s", message);
             result.confirm();
+
+            String[] tokens = message.split("kanji:");
+            if (tokens.length == 2) {
+                String keyword = getKanjiMap().get(tokens[1]);
+                if (keyword != null)
+                    Themes.showThemedToast(AbstractFlashcardViewer.this, keyword, true);
+            }
             return true;
         }
     }
@@ -2813,143 +2865,15 @@ public abstract class AbstractFlashcardViewer extends NavigationDrawerActivity {
   /////////////////////// EDIT STARTS
 
   public static final String TAG = "ON_TOUCH_TEST";
-  private static Map<String, String> kanjiMap;
 
   /** Fixing bug 720: <input> focus, thanks to pablomouzo on android issue 7189 */
   class MyWebView extends WebView {
 
-    private static final int KANJI_PER_LINE = 9;
-    private static final int MARGIN_LEFT = 20;
-    private static final int MARGIN_TOP = 10;
-    private static final int CHAR_WIDTH = 47;
-    private static final int LINE_HEIGHT = 50;
-
-    private static final int DOUBLE_TAP_LIMIT = 500;  // ms
-
-    private String webContent;
-    private long lastClickTimestamp = 0;
-    private boolean isDoubleTap = false;
-
-    public MyWebView(final Context context) {
-      super(context);
-
-      if (kanjiMap == null) initKanjiMap(context);
-
-      setOnTouchListener(new OnTouchListener() {
-
-        @Override
-        public boolean onTouch(View view, MotionEvent motionEvent) {
-          if (!(motionEvent.getAction() == MotionEvent.ACTION_UP)) return false;
-
-          long timeNow = System.currentTimeMillis();
-          long timeBetweenTaps = timeNow - lastClickTimestamp;
-          lastClickTimestamp = timeNow;
-
-          Log.d(TAG, "TAP TIME: " + timeBetweenTaps);
-          if (timeBetweenTaps <= DOUBLE_TAP_LIMIT) {
-            isDoubleTap = true;
-          } else {
-            isDoubleTap = false;
-          }
-
-          int x = (int)motionEvent.getX();
-          int y = (int)motionEvent.getY();
-          int contentX = x - MARGIN_LEFT;
-          int contentY = y - MARGIN_TOP;
-
-          String cardText = parseCardText();
-
-          if (cardText != null) {
-            Log.i(TAG, "Found card text: " + cardText);
-
-            List<String> lines = splitEqually(cardText, KANJI_PER_LINE);
-            String kanji = findKanji(lines, contentX, contentY);
-            String keyword = kanjiMap.get(kanji);
-
-            if (kanji != null && keyword != null) {
-              Log.i(TAG, "Kanji: " + kanji + " keyword: " + keyword);
-
-              if (isDoubleTap) {
-                loadKoohiiPage(kanji);
-              } else {
-                showToast(keyword);
-              }
-            }
-          }
-
-          return false;
-        }
-      });
-    }
-
-    private void loadKoohiiPage(String kanji) {
-      String url = "http://kanji.koohii.com/study/kanji/" + kanji;
-      Intent intent = new Intent(Intent.ACTION_VIEW);
-      intent.setData(Uri.parse(url));
-      startActivity(intent);
-    }
-
-    private void showToast(String keyword) {
-      Themes.showThemedToast(AbstractFlashcardViewer.this, keyword, true);
-    }
-
-    private String parseCardText() {
-      Pattern pattern = Pattern.compile("<div\\s+class=jp>.+?<\\/div>");
-      Matcher matcher = pattern.matcher(webContent);
-
-      if (matcher.find()) {
-        return Html.fromHtml(matcher.group()).toString();
-      } else {
-        return null;
-      }
-    }
-
-    private String findKanji(List<String> lines, int x, int y) {
-      if (x > 0 && y > 0) {
-        int lineIndex = y / LINE_HEIGHT;
-        int charIndex = x / CHAR_WIDTH;
-
-        if (lineIndex < lines.size()) {
-          String line = lines.get(lineIndex);
-          if (charIndex < line.length()) {
-            return String.valueOf(line.charAt(charIndex));
-          }
-        }
-      }
-      return null;
-    }
-
-    private void initKanjiMap(Context context) {
-      Map<String, String> map = new HashMap<String, String>();
-      String[] data = context.getResources().getStringArray(R.array.heisig_data);
-
-      for (String kanjiData : data) {
-        String[] tuple = kanjiData.split(":");
-        map.put(tuple[0], tuple[1]);
+      public MyWebView(Context context) {
+          super(context);
       }
 
-      kanjiMap = map;
-    }
-
-    private List<String> splitEqually(String text, int size) {
-      List<String> ret = new ArrayList<String>();
-
-      for (int start = 0; start < text.length(); start += size) {
-        ret.add(text.substring(start, Math.min(text.length(), start + size)));
-      }
-      return ret;
-    }
-
-    @Override
-    public void loadDataWithBaseURL(String baseUrl, String data, String mimeType, String encoding, String historyUrl) {
-      super.loadDataWithBaseURL(baseUrl, data, mimeType, encoding, historyUrl);
-      webContent = data;
-    }
-
-/////////////////////// EDIT ENDS
-
-
-        @Override
+      @Override
         public boolean onCheckIsTextEditor() {
             if (mInputWorkaround) {
                 return true;
@@ -2957,7 +2881,6 @@ public abstract class AbstractFlashcardViewer extends NavigationDrawerActivity {
                 return super.onCheckIsTextEditor();
             }
         }
-
 
         @Override
         protected void onScrollChanged(int horiz, int vert, int oldHoriz, int oldVert) {
@@ -2986,7 +2909,6 @@ public abstract class AbstractFlashcardViewer extends NavigationDrawerActivity {
                 mIsYScrolling = false;
             }
         };
-
     }
 
     class MyGestureDetector extends SimpleOnGestureListener {
